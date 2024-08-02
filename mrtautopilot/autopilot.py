@@ -7,7 +7,7 @@ import logging
 import struct
 from dataclasses import dataclass
 from enum import Enum
-
+from typing import List, Union
 
 import mrtmavlink
 
@@ -93,6 +93,7 @@ class MagothyCustomMainMode(Enum):
 
 
 class MagothyCustomSubModeGuided(Enum):
+    UNSET = 0
     READY = 1
     MISSION = 2
     LOITER = 3
@@ -114,7 +115,7 @@ class MagothyCustomSubModeManualBitmask(Enum):
 
 @dataclass
 class LowBandwidth:
-    def __init__(self, msg, health_items: list[HealthItem]):
+    def __init__(self, msg, health_items: List[HealthItem]):
         self.main_mode = MagothyCustomMainMode((msg.custom_mode >> 16) & 0xFF)
         self.sub_mode = MagothyCustomSubModeGuided((msg.custom_mode >> 24) & 0xFF)
 
@@ -168,23 +169,22 @@ class LowBandwidth:
 
     main_mode: MagothyCustomMainMode
     sub_mode: MagothyCustomSubModeGuided
-    latitude_deg: float | None
-    longitude_deg: float | None
-    battery_voltage_V: float | None
-    battery_current_A: float | None
-    battery_soc: int | None
-    mission_item_seq: int | None
-    speed_mps: float | None
-    course_deg: float | None
-    heading_deg: float | None
+    latitude_deg: Union[float, None]
+    longitude_deg: Union[float, None]
+    battery_voltage_V: Union[float, None]
+    battery_current_A: Union[float, None]
+    battery_soc: Union[int, None]
+    mission_item_seq: Union[int, None]
+    speed_mps: Union[float, None]
+    course_deg: Union[float, None]
+    heading_deg: Union[float, None]
     num_satellites: int
-    target_speed_mps: float | None
-    target_course_deg: float | None
+    target_speed_mps: Union[float, None]
+    target_course_deg: Union[float, None]
     is_position_independent: bool
-    position_error_m: float | None
-    triggered_health_items: list[HealthItem]
-    fault_response: HealthResponse | None
-
+    position_error_m: Union[float, None]
+    triggered_health_items: List[HealthItem]
+    fault_response: Union[HealthResponse, None]
 
 
 class SendMavlink:
