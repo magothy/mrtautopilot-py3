@@ -256,9 +256,9 @@ class MavlinkThread:
                 self.low_bandwidth_queue.put_nowait(data)
 
     def send_heartbeat(self):
-        self.loop.create_task(self._send_heartbeat())
+        self.loop.call_soon_threadsafe(lambda: self._send_heartbeat())
 
-    async def _send_heartbeat(self):
+    def _send_heartbeat(self):
         logging.info("Sending Heartbeat")
         self.conn.heartbeat_send(
             mrtmavlink.MAV_TYPE_GCS, mrtmavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0
@@ -284,9 +284,9 @@ class MavlinkThread:
         self.conn.system_time_send(int(time.time() * 1e6), 0)
 
     def send_autopilot_stop(self):
-        self.loop.create_task(self._send_autopilot_stop())
+        self.loop.call_soon_threadsafe(lambda: self._send_autopilot_stop())
 
-    async def _send_autopilot_stop(self):
+    def _send_autopilot_stop(self):
         if not self.system_id:
             logging.warn("System ID not set, not sending STOP")
             return
@@ -319,9 +319,11 @@ class MavlinkThread:
         )
 
     def send_waypoint(self, lat_deg: float, lon_deg: float, speed_mps: float):
-        self.loop.create_task(self._send_waypoint(lat_deg, lon_deg, speed_mps))
+        self.loop.call_soon_threadsafe(
+            lambda: self._send_waypoint(lat_deg, lon_deg, speed_mps)
+        )
 
-    async def _send_waypoint(self, lat_deg: float, lon_deg: float, speed_mps: float):
+    def _send_waypoint(self, lat_deg: float, lon_deg: float, speed_mps: float):
         if not self.system_id:
             logging.warn("System ID not set, not sending waypoint")
             return
