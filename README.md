@@ -5,7 +5,7 @@ This repository contains the Python3 API for the MRT Autopilot.
 ## Installation
 
 ```
-pip3 install git+https://github.com/magothy/mrtautopilot-py3@v2
+pip3 install git+https://github.com/magothy/mrtautopilot-py3@v3
 ```
 
 ## Usage

@@ -1,3 +1,3 @@
-__version__ = "2"
+__version__ = "3"
 
 from .autopilot import *
