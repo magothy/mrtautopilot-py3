@@ -44,9 +44,11 @@ def main():
 
             count += 1
             if count == 10:
+                mavlink.set_motor_enablement(True)
                 mavlink.send_waypoint(38.3, -77.1, 3.0)
 
             if count == 20:
+                mavlink.set_motor_enablement(False)
                 mavlink.send_autopilot_stop()
 
             for key, mask in sel.select():

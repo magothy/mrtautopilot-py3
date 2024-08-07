@@ -115,7 +115,11 @@ class MagothyCustomSubModeManualBitmask(Enum):
 
 @dataclass
 class LowBandwidth:
-    def __init__(self, msg, health_items: List[HealthItem]):
+    def __init__(
+        self,
+        msg: mrtmavlink.MAVLink_magothy_low_bandwidth_message,
+        health_items: List[HealthItem],
+    ):
         self.main_mode = MagothyCustomMainMode((msg.custom_mode >> 16) & 0xFF)
         self.sub_mode = MagothyCustomSubModeGuided((msg.custom_mode >> 24) & 0xFF)
 
@@ -188,7 +192,7 @@ class LowBandwidth:
 
 
 class SendMavlink:
-    def __init__(self, sock):
+    def __init__(self, sock: socket.socket):
         self.address = ("127.0.0.1", 14551)
         self.sock = sock
 
@@ -211,7 +215,9 @@ class MavlinkThread:
         self.is_done = False
         self.thread = threading.Thread(target=self._thread, name="MrtMavlink")
 
-        self.low_bandwidth_queue = multiprocessing.Queue(maxsize=1)
+        self.low_bandwidth_queue: multiprocessing.Queue[LowBandwidth] = (
+            multiprocessing.Queue(maxsize=1)
+        )
 
     def __enter__(self):
         self.start()
@@ -262,6 +268,56 @@ class MavlinkThread:
         logging.info("Sending Heartbeat")
         self.conn.heartbeat_send(
             mrtmavlink.MAV_TYPE_GCS, mrtmavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0
+        )
+
+    def set_parameter(
+        self,
+        id: str,
+        value: float,
+        typ: int,
+        component: int = mrtmavlink.MAV_COMP_ID_AUTOPILOT1,
+    ):
+        self.loop.call_soon_threadsafe(
+            lambda: self._set_parameter(id, value, typ, component)
+        )
+
+    def _set_parameter(self, id: str, value: float, typ: int, component: int):
+        assert len(id) <= 16
+        if not self.system_id:
+            logging.info("Failed to set parameter, system_id not set")
+            return
+
+        logging.info(f"Setting Param {id} to {value}")
+
+        if typ == mrtmavlink.MAV_PARAM_TYPE_UINT8:
+            val_bytes = struct.pack("BBBB", int(value), 0, 0, 0)
+        elif typ == mrtmavlink.MAV_PARAM_TYPE_INT8:
+            val_bytes = struct.pack("bBBB", int(value), 0, 0, 0)
+        elif typ == mrtmavlink.MAV_PARAM_TYPE_UINT16:
+            val_bytes = struct.pack("<HBB", int(value), 0, 0)
+        elif typ == mrtmavlink.MAV_PARAM_TYPE_INT16:
+            val_bytes = struct.pack("<hBB", int(value), 0, 0)
+        elif typ == mrtmavlink.MAV_PARAM_TYPE_UINT32:
+            val_bytes = struct.pack("<I", int(value))
+        elif typ == mrtmavlink.MAV_PARAM_TYPE_INT32:
+            val_bytes = struct.pack("<i", int(value))
+        elif typ == mrtmavlink.MAV_PARAM_TYPE_REAL32:
+            val_bytes = struct.pack("<f", value)
+        else:
+            assert False, "unsupported type"
+
+        self.conn.param_set_send(
+            self.system_id,
+            component,
+            id.encode("utf-8"),
+            struct.unpack("f", val_bytes)[0],
+            typ,
+        )
+
+    def set_motor_enablement(self, enable: bool):
+        logging.info(f"Setting Motor Enablement to {enable}")
+        self.set_parameter(
+            "MOTOR_ENABLE", 1 if enable else 0, mrtmavlink.MAV_PARAM_TYPE_UINT8
         )
 
     async def _run(self):
