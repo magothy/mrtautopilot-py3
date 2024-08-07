@@ -222,7 +222,7 @@ class MavlinkThread:
     def __enter__(self):
         self.start()
 
-    def __exit__(self, _type, _value, _traceback):
+    def __exit__(self, _type, _value, _traceback):  # type: ignore
         self.stop()
 
     def start(self):
@@ -256,7 +256,7 @@ class MavlinkThread:
             logging.info(f"Setting System ID to {sys_id}")
 
         if msg.get_msgId() == mrtmavlink.MAVLINK_MSG_ID_MAGOTHY_LOW_BANDWIDTH:
-            data = LowBandwidth(msg, HEALTH_ITEMS)
+            data = LowBandwidth(msg, HEALTH_ITEMS)  # type: ignore
 
             if not self.low_bandwidth_queue.full():
                 self.low_bandwidth_queue.put_nowait(data)
@@ -400,3 +400,19 @@ class MavlinkThread:
             lon_deg * 1e7,  # param6 (longitude_deg * 1e7)
             0,  # param7
         )
+
+    def send_protobuf_proxy(self, proto_id: int, buf: bytes):
+        self.loop.call_soon_threadsafe(lambda: self._send_protobuf_proxy(proto_id, buf))
+
+    def _send_protobuf_proxy(self, proto_id: int, buf: bytes):
+        MAX_BUF_LEN = 251
+        buf_len = len(buf)
+
+        assert buf_len <= MAX_BUF_LEN
+        logging.info(f"Sending Protobuf Proxy with ID {proto_id} and len {buf_len}")
+
+        pad_len = MAX_BUF_LEN - buf_len
+        buf += b"\0" * pad_len
+        assert len(buf) == MAX_BUF_LEN
+
+        self.conn.magothy_protobuf_proxy_send(proto_id, False, buf_len, buf)

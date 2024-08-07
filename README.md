@@ -15,15 +15,22 @@ Example usage:
 ```python
 #!/usr/bin/env python3
 
-import time
 import logging
 import selectors
 
 import mrtautopilot
 
+# example for send_protobuf_proxy
+from mrtproto import Magothy_pb2
+PROTO_ID = 0x5433  # defined by protocol
+
 
 def main():
     mavlink = mrtautopilot.MavlinkThread()
+
+    proto = Magothy_pb2.VehicleData()
+    proto.position.latitude_deg = 38.3
+    proto.position.longitude_deg = -77.1
 
     def got_low_bandwidth():
         d: mrtautopilot.LowBandwidth = mavlink.low_bandwidth_queue.get_nowait()
@@ -43,6 +50,10 @@ def main():
             mavlink.send_heartbeat()
 
             count += 1
+
+            if count == 5:
+                mavlink.send_protobuf_proxy(PROTO_ID, proto.SerializeToString())
+
             if count == 10:
                 mavlink.set_motor_enablement(True)
                 mavlink.send_waypoint(38.3, -77.1, 3.0)
