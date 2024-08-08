@@ -7,7 +7,7 @@ import logging
 import struct
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Union
+from typing import List, Union, Tuple
 
 import mrtmavlink
 
@@ -113,6 +113,17 @@ class MagothyCustomSubModeManualBitmask(Enum):
     STABILIZED_DEGRADED = 0x80
 
 
+class AutopilotMode(Enum):
+    Unknown = 0
+    Standby = 1
+    Manual = 2
+    HealthyMission = 3
+    UnhealthyMission = 4
+    Loiter = 5
+    MissionPlanning = 6
+    UnhealthyMissionPlanning = 7
+
+
 @dataclass
 class LowBandwidth:
     def __init__(
@@ -122,6 +133,27 @@ class LowBandwidth:
     ):
         self.main_mode = MagothyCustomMainMode((msg.custom_mode >> 16) & 0xFF)
         self.sub_mode = MagothyCustomSubModeGuided((msg.custom_mode >> 24) & 0xFF)
+
+        self.autopilot_mode = AutopilotMode.Unknown
+        if self.main_mode == MagothyCustomMainMode.MANUAL:
+            self.autopilot_mode = AutopilotMode.Manual
+        elif self.main_mode == MagothyCustomMainMode.GUIDED:
+            if self.sub_mode == MagothyCustomSubModeGuided.READY:
+                self.autopilot_mode = AutopilotMode.Standby
+            elif self.sub_mode == MagothyCustomSubModeGuided.MISSION:
+                self.autopilot_mode = AutopilotMode.HealthyMission
+            elif self.sub_mode == MagothyCustomSubModeGuided.UNHEALTHY_MISSION:
+                self.autopilot_mode = AutopilotMode.UnhealthyMission
+            elif self.sub_mode == MagothyCustomSubModeGuided.LOITER:
+                self.autopilot_mode = AutopilotMode.Loiter
+            elif self.sub_mode == MagothyCustomSubModeGuided.MISSION_PLANNING:
+                self.autopilot_mode = AutopilotMode.MissionPlanning
+            elif self.sub_mode == MagothyCustomSubModeGuided.UNHEALTHY_MISSION_PLANNING:
+                self.autopilot_mode = AutopilotMode.UnhealthyMissionPlanning
+            else:
+                logging.debug(f"Unknown sub mode: {self.sub_mode}")
+        else:
+            logging.debug(f"Unknown main mode: {self.main_mode}")
 
         self.latitude_deg = msg.lat / 1e7 if msg.lat != 0x7FFFFFFF else None
         self.longitude_deg = msg.lon / 1e7 if msg.lon != 0x7FFFFFFF else None
@@ -171,6 +203,7 @@ class LowBandwidth:
 
             assert self.fault_response is not None
 
+    autopilot_mode: AutopilotMode
     main_mode: MagothyCustomMainMode
     sub_mode: MagothyCustomSubModeGuided
     latitude_deg: Union[float, None]
@@ -191,36 +224,59 @@ class LowBandwidth:
     fault_response: Union[HealthResponse, None]
 
 
-class SendMavlink:
-    def __init__(self, sock: socket.socket):
-        self.address = ("127.0.0.1", 14551)
-        self.sock = sock
-
-    def write(self, data: bytes):
-        self.sock.sendto(data, self.address)
-
-
 class MavlinkThread:
-    def __init__(self):
+    def __init__(
+        self,
+        bind_address: str = "0.0.0.0",
+        remote_address: str = "127.0.0.1",
+        remote_port: int = 14551,
+        multicast_group: str = "",
+        multicast_port: int = 14550,
+    ):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setblocking(False)
-        self.system_id: int | None = None
+
+        if multicast_group:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            self.sock.bind((bind_address, multicast_port))
+
+            mreq = struct.pack(
+                "4sl", socket.inet_aton(multicast_group), socket.INADDR_ANY
+            )
+            self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        else:
+            self.sock.bind((bind_address, 0))
+
+        self.system_id: Union[int, None] = None
+
+        self.remote_address = remote_address
+        self.remote_port = remote_port
+        self.remote_address_list = [remote_address]
+        if remote_address == "127.0.0.1":
+            self.remote_address_list.extend(
+                socket.gethostbyname_ex(socket.gethostname())[2]
+            )
 
         self.is_started = False
         self.is_started_cv = threading.Condition()
-        self.conn = mrtmavlink.MAVLink(
-            SendMavlink(self.sock), 254, mrtmavlink.MAV_COMP_ID_SYSTEM_CONTROL
-        )
+        self.conn = mrtmavlink.MAVLink(self, 254, mrtmavlink.MAV_COMP_ID_SYSTEM_CONTROL)
 
         self.is_done = False
         self.thread = threading.Thread(target=self._thread, name="MrtMavlink")
 
         self.low_bandwidth_queue: multiprocessing.Queue[LowBandwidth] = (
-            multiprocessing.Queue(maxsize=1)
+            multiprocessing.Queue(maxsize=5)
         )
+
+        self.low_bandwidth_queue_fileobj: int = self.low_bandwidth_queue._reader.fileno()  # type: ignore
+
+    def write(self, data: bytes):
+        self.sock.sendto(data, (self.remote_address, self.remote_port))
 
     def __enter__(self):
         self.start()
+        return self
 
     def __exit__(self, _type, _value, _traceback):  # type: ignore
         self.stop()
@@ -238,17 +294,24 @@ class MavlinkThread:
         self.is_done = True
         self.thread.join()
 
-    async def handle_data(self, loop: asyncio.AbstractEventLoop):
-        while not self.is_done:
-            data = await loop.sock_recv(self.sock, 280)
+    def connection_made(self, transport: asyncio.DatagramTransport):
+        pass
 
-            messages = self.conn.parse_buffer(data)
-            if messages:
-                for msg in messages:
-                    self._msg_callback(msg)
+    def datagram_received(self, data: bytes, addr: Tuple[str, int]):
+        messages = self.conn.parse_buffer(data)
+        if not addr[0] in self.remote_address_list:
+            return
+
+        if addr[1] != self.remote_port:
+            self.remote_port = addr[1]
+            logging.info(f"Setting Remote Port to {self.remote_port}")
+
+        if messages:
+            for msg in messages:
+                self._msg_callback(msg)
 
     def _msg_callback(self, msg: mrtmavlink.MAVLink_message):
-        logging.debug(f"Received: {msg.msgname}")
+        logging.debug(f"Received: {msg.msgname}, addr")
 
         sys_id = msg.get_srcSystem()
         if self.system_id != sys_id:
@@ -326,7 +389,7 @@ class MavlinkThread:
             self.is_started_cv.notify()
 
         self.loop = asyncio.get_running_loop()
-        self.loop.create_task(self.handle_data(self.loop))
+        await self.loop.create_datagram_endpoint(lambda: self, sock=self.sock)  # type: ignore
 
         while not self.is_done:
             logging.debug("Sending system time")

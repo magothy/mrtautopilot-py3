@@ -5,7 +5,7 @@ This repository contains the Python3 API for the MRT Autopilot.
 ## Installation
 
 ```
-pip3 install git+https://github.com/magothy/mrtautopilot-py3@v3
+pip3 install git+https://github.com/magothy/mrtautopilot-py3@v4
 ```
 
 ## Usage
@@ -39,7 +39,7 @@ def main():
     try:
         sel = selectors.DefaultSelector()
         sel.register(
-            mavlink.low_bandwidth_queue._reader.fileno(),
+            mavlink.low_bandwidth_queue_fileobj,
             selectors.EVENT_READ,
             got_low_bandwidth,
         )
