@@ -269,7 +269,9 @@ class MavlinkThread:
             multiprocessing.Queue(maxsize=5)
         )
 
-        self.low_bandwidth_queue_fileobj: int = self.low_bandwidth_queue._reader.fileno()  # type: ignore
+        self.low_bandwidth_queue_fileobj: int = (
+            self.low_bandwidth_queue._reader.fileno()  # type: ignore
+        )
 
     def write(self, data: bytes):
         self.sock.sendto(data, (self.remote_address, self.remote_port))
@@ -299,7 +301,7 @@ class MavlinkThread:
 
     def datagram_received(self, data: bytes, addr: Tuple[str, int]):
         messages = self.conn.parse_buffer(data)
-        if not addr[0] in self.remote_address_list:
+        if addr[0] not in self.remote_address_list:
             return
 
         if addr[1] != self.remote_port:
