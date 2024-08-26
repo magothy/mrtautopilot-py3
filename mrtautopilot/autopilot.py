@@ -466,6 +466,33 @@ class MavlinkThread:
             0,  # param7
         )
 
+    def send_loiter(self, speed_mps: float, radius_m: float, duration_s: float):
+        self.loop.call_soon_threadsafe(
+            lambda: self._send_loiter(speed_mps, radius_m, duration_s)
+        )
+
+    def _send_loiter(self, speed_mps: float, radius_m: float, duration_s: float):
+        if not self.system_id:
+            logging.warn("System ID not set, not sending loiter")
+            return
+        logging.info(
+            f"Sending Loiter: speed {speed_mps} m/s, radius {radius_m} m, duration {duration_s} s"
+        )
+
+        self.conn.command_long_send(
+            self.system_id,  # target_system
+            mrtmavlink.MAV_COMP_ID_AUTOPILOT1,  # target_component
+            mrtmavlink.MAV_CMD_WAYPOINT_USER_4,  # command
+            0,  # confirmation
+            duration_s,  # param1 - duration (seconds)
+            speed_mps,  # param2 - speed (m/s)
+            radius_m,  # param3 - radiums (m)
+            0,  # param4 - unused
+            float("nan"),  # param5 (latitude_deg * 1e7)
+            float("nan"),  # param6 (longitude_deg * 1e7)
+            0,  # param7 - unused
+        )
+
     def send_protobuf_proxy(self, proto_id: int, buf: bytes):
         self.loop.call_soon_threadsafe(lambda: self._send_protobuf_proxy(proto_id, buf))
 
