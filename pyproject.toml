@@ -7,5 +7,9 @@ dependencies = ["mrtmavlink >= 26.0"]
 maintainers = [{ name = "Nathan Knotts", email = "nathan@magothyrt.com" }]
 readme = "README.md"
 
+[project.urls]
+Homepage = "https://www.magothyrt.com/"
+Repository = "https://github.com/magothy/mrtautopilot-py3.git"
+
 [tool.setuptools.dynamic]
 version = { attr = "mrtautopilot.__version__" }
