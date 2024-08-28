@@ -3,9 +3,7 @@ name = "mrtautopilot"
 description = "Communicate with the MRT Autopilot Mavlink API"
 dynamic = ["version"]
 requires-python = ">= 3.8"
-dependencies = [
-    "mrtmavlink @ git+https://github.com/magothy/mrtmavlink-py3@v26",
-]
+dependencies = ["mrtmavlink >= 26.0"]
 maintainers = [{ name = "Nathan Knotts", email = "nathan@magothyrt.com" }]
 readme = "README.md"
 
