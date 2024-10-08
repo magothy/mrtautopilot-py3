@@ -21,14 +21,14 @@ import selectors
 import mrtautopilot
 
 # example for send_protobuf_proxy
-from mrtproto import Magothy_pb2
+from mrtproto import autopilot_pb2
 PROTO_ID = 0x5433  # defined by protocol
 
 
 def main():
     mavlink = mrtautopilot.MavlinkThread()
 
-    proto = Magothy_pb2.VehicleData()
+    proto = autopilot_pb2.VehicleData()
     proto.position.latitude_deg = 38.3
     proto.position.longitude_deg = -77.1
 
@@ -54,6 +54,29 @@ def main():
             if count == 5:
                 mavlink.send_protobuf_proxy(PROTO_ID, proto.SerializeToString())
 
+            if count == 6:
+                m = mrtautopilot.mission
+                mavlink.send_mission(
+                    m.Mission(
+                        fault_config=m.FaultConfig(
+                            fault_responses={},
+                            loiter_radius_m=30,
+                            loiter_duration_s=365 * 24 * 60 * 60,
+                            response_speed_mps=3,
+                        ),
+                        rally_points=[],
+                        fence=[],
+                        mission_items=[
+                            m.Waypoint(lat_deg=38.31, lon_deg=-77.02, speed_mps=6),
+                            m.Waypoint(lat_deg=38.31, lon_deg=-77.00, speed_mps=6),
+                            m.Waypoint(lat_deg=38.34, lon_deg=-77.00, speed_mps=7),
+                            m.DriftLoiter(
+                                lat_deg=38.34, lon_deg=-77.00, speed_mps=3, radius_m=50
+                            ),
+                        ],
+                    )
+                )
+
             if count == 10:
                 mavlink.set_motor_enablement(True)
                 mavlink.send_waypoint(38.3, -77.1, 3.0)
@@ -71,7 +94,7 @@ def main():
 
 def setup_logging():
     logging.basicConfig(
-        format="%(asctime)s.%(msecs)03d | %(levelname)8s | %(message)s",
+        format="%(asctime)s.%(msecs)03d | %(threadName)s | %(levelname)8s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     logger = logging.getLogger()

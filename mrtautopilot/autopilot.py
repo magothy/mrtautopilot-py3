@@ -5,11 +5,18 @@ import socket
 import asyncio
 import logging
 import struct
+import uuid
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Union, Tuple
 
 import mrtmavlink
+from . import mission
+
+import zstandard
+
+
+SYSTEM_ID = 254  # system id for the mavlink thread
 
 
 @dataclass
@@ -22,68 +29,74 @@ class HealthItem:
 HEALTH_ITEMS = [
     HealthItem(
         health_id="health-monitor-status",
-        status_id=0x10000000,
+        status_id=mission.HealthId.HealthMonitor.value,
         description="Health Monitor is not properly configured",
     ),
     HealthItem(
-        health_id="geo-fence", status_id=0x100000, description="Geofence is breached"
+        health_id="geo-fence",
+        status_id=mission.HealthId.GeoFence.value,
+        description="Geofence is breached",
     ),
     HealthItem(
         health_id="mcu-timeout",
-        status_id=0x8000,
+        status_id=mission.HealthId.McuTimeout.value,
         description="MCU Data Is Missing or Stale",
     ),
     HealthItem(
         health_id="gps-timeout",
-        status_id=0x20,
+        status_id=mission.HealthId.GpsTimeout.value,
         description="GPS Data Is Missing or Stale",
     ),
     HealthItem(
         health_id="ahrs-timeout",
-        status_id=0x200000,
+        status_id=mission.HealthId.AhrsTimeout.value,
         description="AHRS Data Is Missing or Stale",
     ),
     HealthItem(
         health_id="depth-timeout",
-        status_id=0x400000,
+        status_id=mission.HealthId.DepthTimeout.value,
         description="Altimeter Data Is Missing or Stale",
     ),
     HealthItem(
         health_id="joystick-timeout",
-        status_id=0x10000,
+        status_id=mission.HealthId.JoystickTimeout.value,
         description="Joystick Data Is Missing or Stale",
     ),
     HealthItem(
         health_id="low-fuel",
-        status_id=0x2000000,
+        status_id=mission.HealthId.LowFuel.value,
         description="Low Fuel or Battery",
     ),
     HealthItem(
         health_id="oc-timeout",
-        status_id=0x8000000,
+        status_id=mission.HealthId.OcTimeout.value,
         description="Operator Console Communication Timeout",
     ),
     HealthItem(
-        health_id="low-disk-space", status_id=0x1000000, description="Low Disk Space"
+        health_id="low-disk-space",
+        status_id=mission.HealthId.LowDiskSpace.value,
+        description="Low Disk Space",
     ),
 ]
 
 
-class HealthResponseType(Enum):
-    Ignore = 0
-    Halt = 1
-    Loiter = 2
-    GoRally = 3
-    GoFirst = 4
-    GoLast = 5
-    GoLaunch = 6
-    Custom = 7
+# https://stackoverflow.com/a/30357446
+def crc16(data: bytes) -> int:
+    crc: int = 0xFFFF
+    msb = crc >> 8
+    lsb = crc & 255
+    for c in data:
+        x = c ^ msb
+        x ^= x >> 4
+        msb = (lsb ^ (x >> 3) ^ (x << 4)) & 255
+        lsb = (x ^ (x << 5)) & 255
+    return (msb << 8) + lsb
 
 
 @dataclass
 class HealthResponse:
     item: HealthItem
-    response: HealthResponseType
+    response: mission.FaultResponseType
 
 
 class MagothyCustomMainMode(Enum):
@@ -122,6 +135,36 @@ class AutopilotMode(Enum):
     Loiter = 5
     MissionPlanning = 6
     UnhealthyMissionPlanning = 7
+
+
+class ExpectedMissionAck:
+    def __init__(
+        self,
+        xfr: Union[mrtmavlink.MAVLink_magothy_mission_transfer_message, None] = None,
+    ):
+        self.target_system = SYSTEM_ID
+        if xfr is None:
+            self.session_id = 0
+            self.chunk_index = 0
+            self.num_chunk = 0
+            self.crc16 = 0
+        else:
+            self.session_id = xfr.session_id
+            self.chunk_index = xfr.chunk_index
+            self.num_chunk = xfr.num_chunk
+            self.crc16 = xfr.crc16
+
+    def equals(self, ack: mrtmavlink.MAVLink_magothy_mission_ack_message) -> bool:
+        return (
+            self.target_system == ack.target_system
+            and self.session_id == ack.session_id
+            and self.chunk_index == ack.chunk_index
+            and self.num_chunk == ack.num_chunk
+            and self.crc16 == ack.crc16
+        )
+
+    def __repr__(self):
+        return f"ExpectedMissionAck(sys_id={self.target_system}, session={self.session_id}, chunk={self.chunk_index}, num_chunk={self.num_chunk}, crc16={self.crc16})"
 
 
 @dataclass
@@ -193,7 +236,7 @@ class LowBandwidth:
         ]:
             details = (msg.custom_mode >> 8) & 0xFF
 
-            response_type = HealthResponseType((details >> 5) & 0x07)
+            response_type = mission.FaultResponseType((details >> 5) & 0x07)
             status_id = 1 << (details & 0x1F)
 
             for item in health_items:
@@ -260,7 +303,9 @@ class MavlinkThread:
 
         self.is_started = False
         self.is_started_cv = threading.Condition()
-        self.conn = mrtmavlink.MAVLink(self, 254, mrtmavlink.MAV_COMP_ID_SYSTEM_CONTROL)
+        self.conn = mrtmavlink.MAVLink(
+            self, SYSTEM_ID, mrtmavlink.MAV_COMP_ID_SYSTEM_CONTROL
+        )
 
         self.is_done = False
         self.thread = threading.Thread(target=self._thread, name="MrtMavlink")
@@ -272,6 +317,12 @@ class MavlinkThread:
         self.low_bandwidth_queue_fileobj: int = (
             self.low_bandwidth_queue._reader.fileno()  # type: ignore
         )
+
+        self.is_sending_mission = False
+        self.mission_session_id = 0
+        self.expected_mission_ack = ExpectedMissionAck()
+        self.expected_cmd_uuid = 0
+        self.ack_result: Union[int, None] = None
 
     def write(self, data: bytes):
         self.sock.sendto(data, (self.remote_address, self.remote_port))
@@ -312,6 +363,11 @@ class MavlinkThread:
             for msg in messages:
                 self._msg_callback(msg)
 
+    async def _notify_ack_result(self, result: int):
+        async with self.ack_cond:
+            self.ack_result = result
+            self.ack_cond.notify()
+
     def _msg_callback(self, msg: mrtmavlink.MAVLink_message):
         logging.debug(f"Received: {msg.msgname}, addr")
 
@@ -320,11 +376,41 @@ class MavlinkThread:
             self.system_id = msg.get_srcSystem()
             logging.info(f"Setting System ID to {sys_id}")
 
-        if msg.get_msgId() == mrtmavlink.MAVLINK_MSG_ID_MAGOTHY_LOW_BANDWIDTH:
-            data = LowBandwidth(msg, HEALTH_ITEMS)  # type: ignore
+        if type(msg) is mrtmavlink.MAVLink_magothy_low_bandwidth_message:
+            data = LowBandwidth(msg, HEALTH_ITEMS)
 
             if not self.low_bandwidth_queue.full():
                 self.low_bandwidth_queue.put_nowait(data)
+        elif type(msg) is mrtmavlink.MAVLink_statustext_message:
+            if (
+                msg.severity == mrtmavlink.MAV_SEVERITY_CRITICAL
+                or msg.severity == mrtmavlink.MAV_SEVERITY_EMERGENCY
+                or msg.severity == mrtmavlink.MAV_SEVERITY_ALERT
+            ):
+                logging.critical(f"Vehicle Status Text: {msg.text}")
+            elif msg.severity == mrtmavlink.MAV_SEVERITY_ERROR:
+                logging.error(f"Vehicle Status Text: {msg.text}")
+            elif (
+                msg.severity == mrtmavlink.MAV_SEVERITY_WARNING
+                or msg.severity == mrtmavlink.MAV_SEVERITY_NOTICE
+            ):
+                logging.warning(f"Vehicle Status Text: {msg.text}")
+            elif msg.severity == mrtmavlink.MAV_SEVERITY_INFO:
+                logging.info(f"Vehicle Status Text: {msg.text}")
+            else:
+                logging.debug(f"Vehicle Status Text: {msg.text}")
+        elif type(msg) is mrtmavlink.MAVLink_magothy_mission_ack_message:
+            if self.expected_mission_ack.equals(msg):
+                logging.debug(f"Received Mission Ack: {msg}")
+                self.loop.create_task(self._notify_ack_result(msg.result))
+        elif type(msg) is mrtmavlink.MAVLink_command_ack_message:
+            if (
+                msg.command == mrtmavlink.MAV_CMD_DO_SET_MISSION_CURRENT
+                and msg.target_system == self.system_id
+                and msg.result_param2 == self.expected_cmd_uuid
+            ):
+                logging.debug(f"Received Command Ack: {msg}")
+                self.loop.create_task(self._notify_ack_result(msg.result))
 
     def send_heartbeat(self):
         self.loop.call_soon_threadsafe(lambda: self._send_heartbeat())
@@ -391,6 +477,7 @@ class MavlinkThread:
             self.is_started_cv.notify()
 
         self.loop = asyncio.get_running_loop()
+        self.ack_cond = asyncio.Condition()
         await self.loop.create_datagram_endpoint(lambda: self, sock=self.sock)  # type: ignore
 
         while not self.is_done:
@@ -409,7 +496,7 @@ class MavlinkThread:
 
     def _send_autopilot_stop(self):
         if not self.system_id:
-            logging.warn("System ID not set, not sending STOP")
+            logging.warning("System ID not set, not sending STOP")
             return
         logging.info("Sending STOP")
 
@@ -446,7 +533,7 @@ class MavlinkThread:
 
     def _send_waypoint(self, lat_deg: float, lon_deg: float, speed_mps: float):
         if not self.system_id:
-            logging.warn("System ID not set, not sending waypoint")
+            logging.warning("System ID not set, not sending waypoint")
             return
         logging.info(
             f"Sending Waypoint to lat {lat_deg}°, lon {lon_deg}°, speed {speed_mps} m/s"
@@ -473,7 +560,7 @@ class MavlinkThread:
 
     def _send_loiter(self, speed_mps: float, radius_m: float, duration_s: float):
         if not self.system_id:
-            logging.warn("System ID not set, not sending loiter")
+            logging.warning("System ID not set, not sending loiter")
             return
         logging.info(
             f"Sending Loiter: speed {speed_mps} m/s, radius {radius_m} m, duration {duration_s} s"
@@ -508,3 +595,140 @@ class MavlinkThread:
         assert len(buf) == MAX_BUF_LEN
 
         self.conn.magothy_protobuf_proxy_send(proto_id, False, buf_len, buf)
+
+    def send_mission(self, mission: mission.Mission):
+        self.loop.create_task(self._send_mission(mission))
+
+    async def _send_mission(self, mission: mission.Mission):
+        if self.is_sending_mission:
+            logging.warning("Already uploading mission")
+            return
+
+        if self.system_id is None:
+            logging.warning("System ID not set, not uploading mission")
+            return
+        if len(mission.mission_items) == 0:
+            logging.warning("Mission is empty, not uploading")
+            return
+
+        logging.info(f"Uploading Mission with {len(mission.mission_items)} items")
+
+        try:
+            self.is_sending_mission = True
+            self.mission_session_id += 1
+
+            mission_buf = mission.to_proto().SerializeToString()
+            buf = zstandard.compress(mission_buf)
+
+            UPLOAD_TIMEOUT_S = 0.5
+            RETRY_PERIOD_S = 0.1
+            max_retries = int(round(UPLOAD_TIMEOUT_S / RETRY_PERIOD_S))
+
+            xfr = mrtmavlink.MAVLink_magothy_mission_transfer_message(
+                target_system=self.system_id,
+                session_id=self.mission_session_id,
+                filename_index=0xFF,
+                chunk_index=0,
+                num_chunk=0,
+                crc16=crc16(buf),
+                payload_len=0,
+                payload=bytes(),
+            )
+            max_payload_len = xfr.lengths[xfr.fieldnames.index("payload")]
+            xfr.num_chunk = len(buf) // max_payload_len + (
+                1 if len(buf) % max_payload_len > 0 else 0
+            )
+
+            for chunk_index in range(xfr.num_chunk):
+                xfr.chunk_index = chunk_index
+                xfr.payload_len = min(
+                    max_payload_len, len(buf) - chunk_index * max_payload_len
+                )
+                begin = chunk_index * max_payload_len
+                end = begin + xfr.payload_len
+                xfr.payload = buf[begin:end]
+                xfr.payload_len = len(xfr.payload)
+                xfr.payload = xfr.payload + bytes(
+                    max_payload_len - len(xfr.payload)
+                )  # must pad to max_payload_len with zeros
+
+                self.expected_mission_ack = ExpectedMissionAck(xfr)
+                for retry_num in range(max_retries):
+                    logging.debug(
+                        f"Uploading mission chunk {chunk_index}/{xfr.num_chunk} ({retry_num}/{max_retries})"
+                    )
+                    self.ack_result = None
+                    self.conn.send(xfr)
+
+                    try:
+                        async with self.ack_cond:
+                            await asyncio.wait_for(self.ack_cond.wait(), RETRY_PERIOD_S)
+                    except asyncio.TimeoutError:
+                        continue
+
+                    if self.ack_result is None:
+                        continue
+
+                    if self.ack_result == mrtmavlink.MAV_RESULT_ACCEPTED:
+                        logging.debug(
+                            f"Received ack for chunk {chunk_index + 1}/{xfr.num_chunk}"
+                        )
+
+                        break
+                    else:
+                        logging.error(
+                            f"Received nack for chunk {chunk_index + 1}/{xfr.num_chunk} - code ({self.ack_result})"
+                        )
+                        return
+
+            if self.ack_result is None:
+                logging.error("Mission upload timed out")
+                return
+
+            logging.info("Mission upload successful, starting mission")
+
+            uid = uuid.uuid4()
+            uuid_params = struct.unpack("<ffff", uid.bytes)
+            self.expected_cmd_uuid = struct.unpack("<iiii", uid.bytes)[0]
+
+            # we have successfully sent the mission, now start it
+            cmd = mrtmavlink.MAVLink_command_long_message(
+                target_system=self.system_id,
+                target_component=mrtmavlink.MAV_COMP_ID_AUTOPILOT1,
+                command=mrtmavlink.MAV_CMD_DO_SET_MISSION_CURRENT,
+                confirmation=1,
+                param1=0,  # current index - always 0
+                param2=0,
+                param3=0,
+                param4=uuid_params[0],
+                param5=uuid_params[1],
+                param6=uuid_params[2],
+                param7=uuid_params[3],
+            )
+
+            for retry_num in range(max_retries):
+                logging.debug(f"Set mission index: ({retry_num+1}/{max_retries})")
+
+                self.ack_result = None
+                self.conn.send(cmd)
+
+                try:
+                    async with self.ack_cond:
+                        await asyncio.wait_for(self.ack_cond.wait(), RETRY_PERIOD_S)
+                except asyncio.TimeoutError:
+                    continue
+
+                if self.ack_result is None:
+                    continue
+
+                if self.ack_result == mrtmavlink.MAV_RESULT_ACCEPTED:
+                    logging.info("Successfully set mission index")
+                    break
+                else:
+                    logging.error(
+                        f"Received nack for mission index - code ({self.ack_result})"
+                    )
+                    return
+
+        finally:
+            self.is_sending_mission = False
