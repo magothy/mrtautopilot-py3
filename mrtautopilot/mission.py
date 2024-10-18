@@ -260,25 +260,6 @@ def make_polygon(
 
 def _fence_items(mission: Mission) -> List[mrtmavlink.MAVLink_mission_item_int_message]:
     out: List[mrtmavlink.MAVLink_mission_item_int_message] = []
-    out.append(
-        mrtmavlink.MAVLink_mission_item_int_message(
-            target_system=0,
-            target_component=0,
-            seq=0,
-            frame=mrtmavlink.MAV_FRAME_MISSION,
-            command=mrtmavlink.MAV_CMD_NAV_FENCE_RETURN_POINT,
-            mission_type=mrtmavlink.MAV_MISSION_TYPE_FENCE,
-            current=0,
-            autocontinue=0,
-            param1=0,
-            param2=0,
-            param3=0,
-            param4=0,
-            x=0,
-            y=0,
-            z=0,
-        )
-    )
 
     for shape in mission.fence:
         if type(shape) is KeepInCirlce:

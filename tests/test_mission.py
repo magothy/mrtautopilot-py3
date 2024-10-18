@@ -36,17 +36,7 @@ class TestMission(unittest.TestCase):
         self.assertEqual(len(mav.rally_items), 0)
 
         ### check fence items ###
-        self.assertEqual(len(mav.fence_items), 1)
-
-        # fence return point (not used)
-        i = mav.fence_items[0]
-        self.assertEqual(i.seq, 0)
-        self.assertEqual(i.frame, mrtmavlink.MAV_FRAME_MISSION)
-        self.assertEqual(i.command, mrtmavlink.MAV_CMD_NAV_FENCE_RETURN_POINT)
-        self.assertEqual(i.mission_type, mrtmavlink.MAV_MISSION_TYPE_FENCE)
-        self.assertEqual(i.param1, 0)
-        self.assertEqual(i.x, 0)
-        self.assertEqual(i.y, 0)
+        self.assertEqual(len(mav.fence_items), 0)
 
         ### check mission items ###
         self.assertEqual(len(mav.mission_items), 18)
@@ -312,21 +302,11 @@ class TestMission(unittest.TestCase):
         self.assertEqual(i.y, -4e7)
 
         ### check fence items ###
-        self.assertEqual(len(mav.fence_items), 10)
-
-        # fence return point (not used)
-        i = mav.fence_items[0]
-        self.assertEqual(i.seq, 0)
-        self.assertEqual(i.frame, mrtmavlink.MAV_FRAME_MISSION)
-        self.assertEqual(i.command, mrtmavlink.MAV_CMD_NAV_FENCE_RETURN_POINT)
-        self.assertEqual(i.mission_type, mrtmavlink.MAV_MISSION_TYPE_FENCE)
-        self.assertEqual(i.param1, 0)
-        self.assertEqual(i.x, 0)
-        self.assertEqual(i.y, 0)
+        self.assertEqual(len(mav.fence_items), 9)
 
         # keep in circle
-        i = mav.fence_items[1]
-        self.assertEqual(i.seq, 1)
+        i = mav.fence_items[0]
+        self.assertEqual(i.seq, 0)
         self.assertEqual(i.frame, mrtmavlink.MAV_FRAME_MISSION)
         self.assertEqual(i.command, mrtmavlink.MAV_CMD_NAV_FENCE_CIRCLE_INCLUSION)
         self.assertEqual(i.mission_type, mrtmavlink.MAV_MISSION_TYPE_FENCE)
@@ -335,8 +315,8 @@ class TestMission(unittest.TestCase):
         self.assertEqual(i.y, -6e7)
 
         # keep out polygon
-        i = mav.fence_items[2]
-        self.assertEqual(i.seq, 2)
+        i = mav.fence_items[1]
+        self.assertEqual(i.seq, 1)
         self.assertEqual(i.frame, mrtmavlink.MAV_FRAME_MISSION)
         self.assertEqual(
             i.command, mrtmavlink.MAV_CMD_NAV_FENCE_POLYGON_VERTEX_EXCLUSION
@@ -346,8 +326,8 @@ class TestMission(unittest.TestCase):
         self.assertEqual(i.x, 7e7)
         self.assertEqual(i.y, -8e7)
 
-        i = mav.fence_items[3]
-        self.assertEqual(i.seq, 3)
+        i = mav.fence_items[2]
+        self.assertEqual(i.seq, 2)
         self.assertEqual(i.frame, mrtmavlink.MAV_FRAME_MISSION)
         self.assertEqual(
             i.command, mrtmavlink.MAV_CMD_NAV_FENCE_POLYGON_VERTEX_EXCLUSION
@@ -357,8 +337,8 @@ class TestMission(unittest.TestCase):
         self.assertEqual(i.x, 9e7)
         self.assertEqual(i.y, -10e7)
 
-        i = mav.fence_items[4]
-        self.assertEqual(i.seq, 4)
+        i = mav.fence_items[3]
+        self.assertEqual(i.seq, 3)
         self.assertEqual(i.frame, mrtmavlink.MAV_FRAME_MISSION)
         self.assertEqual(
             i.command, mrtmavlink.MAV_CMD_NAV_FENCE_POLYGON_VERTEX_EXCLUSION
@@ -369,8 +349,8 @@ class TestMission(unittest.TestCase):
         self.assertEqual(i.y, -12e7)
 
         # keep in polygon
-        i = mav.fence_items[5]
-        self.assertEqual(i.seq, 5)
+        i = mav.fence_items[4]
+        self.assertEqual(i.seq, 4)
         self.assertEqual(i.frame, mrtmavlink.MAV_FRAME_MISSION)
         self.assertEqual(
             i.command, mrtmavlink.MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION
@@ -380,8 +360,8 @@ class TestMission(unittest.TestCase):
         self.assertEqual(i.x, 13e7)
         self.assertEqual(i.y, -14e7)
 
-        i = mav.fence_items[6]
-        self.assertEqual(i.seq, 6)
+        i = mav.fence_items[5]
+        self.assertEqual(i.seq, 5)
         self.assertEqual(i.frame, mrtmavlink.MAV_FRAME_MISSION)
         self.assertEqual(
             i.command, mrtmavlink.MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION
@@ -391,8 +371,8 @@ class TestMission(unittest.TestCase):
         self.assertEqual(i.x, 15e7)
         self.assertEqual(i.y, -16e7)
 
-        i = mav.fence_items[7]
-        self.assertEqual(i.seq, 7)
+        i = mav.fence_items[6]
+        self.assertEqual(i.seq, 6)
         self.assertEqual(i.frame, mrtmavlink.MAV_FRAME_MISSION)
         self.assertEqual(
             i.command, mrtmavlink.MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION
@@ -402,8 +382,8 @@ class TestMission(unittest.TestCase):
         self.assertEqual(i.x, 17e7)
         self.assertEqual(i.y, -18e7)
 
-        i = mav.fence_items[8]
-        self.assertEqual(i.seq, 8)
+        i = mav.fence_items[7]
+        self.assertEqual(i.seq, 7)
         self.assertEqual(i.frame, mrtmavlink.MAV_FRAME_MISSION)
         self.assertEqual(
             i.command, mrtmavlink.MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION
@@ -414,8 +394,8 @@ class TestMission(unittest.TestCase):
         self.assertEqual(i.y, -20e7)
 
         # keep out circle
-        i = mav.fence_items[9]
-        self.assertEqual(i.seq, 9)
+        i = mav.fence_items[8]
+        self.assertEqual(i.seq, 8)
         self.assertEqual(i.frame, mrtmavlink.MAV_FRAME_MISSION)
         self.assertEqual(i.command, mrtmavlink.MAV_CMD_NAV_FENCE_CIRCLE_EXCLUSION)
         self.assertEqual(i.mission_type, mrtmavlink.MAV_MISSION_TYPE_FENCE)
