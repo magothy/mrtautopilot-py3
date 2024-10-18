@@ -30,16 +30,11 @@ class Polygon:
 Area = Union[Circle, Polygon]
 
 
+@dataclass
 class Waypoint:
-    def __init__(
-        self,
-        lat_deg: float,
-        lon_deg: float,
-        speed_mps: float,
-    ):
-        self.lat_deg = lat_deg
-        self.lon_deg = lon_deg
-        self.speed_mps = speed_mps
+    lat_deg: float
+    lon_deg: float
+    speed_mps: float
 
 
 class DriftLoiter:
@@ -56,6 +51,9 @@ class DriftLoiter:
         self.speed_mps = speed_mps
         self.radius_m = radius_m
         self.duration_s = duration_s
+
+    def __repr__(self) -> str:
+        return f"DriftLoiter(lat_deg={self.lat_deg}, lon_deg={self.lon_deg}, speed_mps={self.speed_mps}, radius_m={self.radius_m}, duration_s={self.duration_s})"
 
 
 class Orbit:
@@ -75,6 +73,9 @@ class Orbit:
         self.is_clockwise = is_clockwise
         self.duration_s = duration_s
 
+    def __repr__(self) -> str:
+        return f"Orbit(lat_deg={self.lat_deg}, lon_deg={self.lon_deg}, speed_mps={self.speed_mps}, radius_m={self.radius_m}, is_clockwise={self.is_clockwise}, duration_s={self.duration_s})"
+
 
 class Milling:
     def __init__(
@@ -88,6 +89,9 @@ class Milling:
         self.area = area
         self.speed_mps = speed_mps
         self.duration_s = duration_s
+
+    def __repr__(self) -> str:
+        return f"Milling(area={self.area}, speed_mps={self.speed_mps}, duration_s={self.duration_s})"
 
 
 class FaultResponseType(Enum):
