@@ -562,9 +562,8 @@ class MavlinkThread:
             self.ack_cond.notify()
 
     def _msg_callback(self, msg: mrtmavlink.MAVLink_message):
-        logging.debug(f"Received: {msg.msgname}, addr")
-
         sys_id = msg.get_srcSystem()
+        logging.debug(f"Received: {msg.msgname}, sys_id={sys_id}, {msg}")
         if self.system_id != sys_id:
             self.system_id = msg.get_srcSystem()
             logging.info(f"Setting System ID to {sys_id}")
