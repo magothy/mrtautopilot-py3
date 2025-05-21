@@ -297,9 +297,12 @@ class MavlinkThread:
         self.remote_port = remote_port
         self.remote_address_list = [remote_address]
         if remote_address == "127.0.0.1":
-            self.remote_address_list.extend(
-                socket.gethostbyname_ex(socket.gethostname())[2]
-            )
+            try:
+                self.remote_address_list.extend(
+                    socket.gethostbyname_ex(socket.gethostname())[2]
+                )
+            except socket.gaierror:
+                logging.warning("Failed to get local IP address")
 
         self.is_started = False
         self.is_started_cv = threading.Condition()
