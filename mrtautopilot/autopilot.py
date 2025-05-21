@@ -434,7 +434,7 @@ class MavlinkThread:
 
     def _set_parameter(self, id: str, value: float, typ: int, component: int):
         assert len(id) <= 16
-        if not self.system_id:
+        if self.system_id is None:
             logging.info("Failed to set parameter, system_id not set")
             return
 
@@ -495,7 +495,7 @@ class MavlinkThread:
         self.loop.call_soon_threadsafe(lambda: self._send_autopilot_stop())
 
     def _send_autopilot_stop(self):
-        if not self.system_id:
+        if self.system_id is None:
             logging.warning("System ID not set, not sending STOP")
             return
         logging.info("Sending STOP")
@@ -532,7 +532,7 @@ class MavlinkThread:
         )
 
     def _send_waypoint(self, lat_deg: float, lon_deg: float, speed_mps: float):
-        if not self.system_id:
+        if self.system_id is None:
             logging.warning("System ID not set, not sending waypoint")
             return
         logging.info(
@@ -559,7 +559,7 @@ class MavlinkThread:
         )
 
     def _send_loiter(self, speed_mps: float, radius_m: float, duration_s: float):
-        if not self.system_id:
+        if self.system_id is None:
             logging.warning("System ID not set, not sending loiter")
             return
         logging.info(
@@ -707,7 +707,7 @@ class MavlinkThread:
             )
 
             for retry_num in range(max_retries):
-                logging.debug(f"Set mission index: ({retry_num+1}/{max_retries})")
+                logging.debug(f"Set mission index: ({retry_num + 1}/{max_retries})")
 
                 self.ack_result = None
                 self.conn.send(cmd)
