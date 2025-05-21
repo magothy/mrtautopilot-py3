@@ -9,7 +9,7 @@ import struct
 import uuid
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Union, Tuple
+from typing import List, Union, Tuple, Callable
 
 import mrtmavlink
 from . import mission
@@ -340,6 +340,115 @@ class Gps2Raw:
     num_set: Union[int, None]
 
 
+@dataclass
+class ParamUint8:
+    value: int
+
+
+@dataclass
+class ParamInt8:
+    value: int
+
+
+@dataclass
+class ParamUint16:
+    value: int
+
+
+@dataclass
+class ParamInt16:
+    value: int
+
+
+@dataclass
+class ParamUint32:
+    value: int
+
+
+@dataclass
+class ParamInt32:
+    value: int
+
+
+@dataclass
+class ParamReal32:
+    value: float
+
+
+ParamValueType = Union[
+    ParamUint8,
+    ParamInt8,
+    ParamUint16,
+    ParamInt16,
+    ParamUint32,
+    ParamInt32,
+    ParamReal32,
+]
+
+
+@dataclass
+class ParamValue:
+    @staticmethod
+    def from_mavlink(msg: mrtmavlink.MAVLink_param_value_message):
+        buffer = struct.pack("<f", msg.param_value)
+        if msg.param_type == mrtmavlink.MAV_PARAM_TYPE_UINT8:
+            value = ParamUint8(int(struct.unpack("BBBB", buffer)[0]))
+        elif msg.param_type == mrtmavlink.MAV_PARAM_TYPE_INT8:
+            value = ParamInt8(int(struct.unpack("bBBB", buffer)[0]))
+        elif msg.param_type == mrtmavlink.MAV_PARAM_TYPE_UINT16:
+            value = ParamUint16(int(struct.unpack("<HBB", buffer)[0]))
+        elif msg.param_type == mrtmavlink.MAV_PARAM_TYPE_INT16:
+            value = ParamInt16(int(struct.unpack("<hBB", buffer)[0]))
+        elif msg.param_type == mrtmavlink.MAV_PARAM_TYPE_UINT32:
+            value = ParamUint32(int(struct.unpack("<I", buffer)[0]))
+        elif msg.param_type == mrtmavlink.MAV_PARAM_TYPE_INT32:
+            value = ParamInt32(int(struct.unpack("<i", buffer)[0]))
+        elif msg.param_type == mrtmavlink.MAV_PARAM_TYPE_REAL32:
+            value = ParamReal32(float(struct.unpack("<f", buffer)[0]))
+        else:
+            raise ValueError(f"Unsupported parameter type: {msg.param_type}")
+
+        return ParamValue(msg.param_id, value, msg.param_index, msg.param_count)
+
+    def to_mavlink(self) -> mrtmavlink.MAVLink_param_value_message:
+        if isinstance(self.value, ParamUint8):
+            typ = mrtmavlink.MAV_PARAM_TYPE_UINT8
+            value = struct.pack("BBBB", self.value.value, 0, 0, 0)
+        elif isinstance(self.value, ParamInt8):
+            typ = mrtmavlink.MAV_PARAM_TYPE_INT8
+            value = struct.pack("bBBB", self.value.value, 0, 0, 0)
+        elif isinstance(self.value, ParamUint16):
+            typ = mrtmavlink.MAV_PARAM_TYPE_UINT16
+            value = struct.pack("<HBB", self.value.value, 0, 0)
+        elif isinstance(self.value, ParamInt16):
+            typ = mrtmavlink.MAV_PARAM_TYPE_INT16
+            value = struct.pack("<hBB", self.value.value, 0, 0)
+        elif isinstance(self.value, ParamUint32):
+            typ = mrtmavlink.MAV_PARAM_TYPE_UINT32
+            value = struct.pack("<I", self.value.value)
+        elif isinstance(self.value, ParamInt32):
+            typ = mrtmavlink.MAV_PARAM_TYPE_INT32
+            value = struct.pack("<i", self.value.value)
+        elif isinstance(self.value, ParamReal32):
+            typ = mrtmavlink.MAV_PARAM_TYPE_REAL32
+            value = struct.pack("<f", self.value.value)
+        else:
+            raise ValueError(f"Unsupported parameter type: {type(self.value)}")
+
+        return mrtmavlink.MAVLink_param_value_message(
+            param_id=self.name.encode("utf-8"),
+            param_value=struct.unpack("f", value)[0],
+            param_type=typ,
+            param_index=self.param_idx,
+            param_count=self.num_param,
+        )
+
+    name: str
+    value: ParamValueType
+    param_idx: int
+    num_param: int
+
+
 class MavlinkThread:
     def __init__(
         self,
@@ -400,6 +509,9 @@ class MavlinkThread:
         self.expected_cmd_uuid = 0
         self.ack_result: Union[int, None] = None
 
+        self.is_requesting_parameters = False
+        self.param_value: Union[ParamValue, None] = None
+
     def write(self, data: bytes):
         self.sock.sendto(data, (self.remote_address, self.remote_port))
 
@@ -438,6 +550,11 @@ class MavlinkThread:
         if messages:
             for msg in messages:
                 self._msg_callback(msg)
+
+    async def _notify_param_result(self, result: ParamValue):
+        async with self.param_cond:
+            self.param_result = result
+            self.param_cond.notify()
 
     async def _notify_ack_result(self, result: int):
         async with self.ack_cond:
@@ -487,6 +604,10 @@ class MavlinkThread:
             ):
                 logging.debug(f"Received Command Ack: {msg}")
                 self.loop.create_task(self._notify_ack_result(msg.result))
+        elif type(msg) is mrtmavlink.MAVLink_param_value_message:
+            param = ParamValue.from_mavlink(msg)
+            logging.debug(f"Received Param Value: {param}")
+            self.loop.create_task(self._notify_param_result(param))
 
     def send_heartbeat(self):
         self.loop.call_soon_threadsafe(lambda: self._send_heartbeat())
@@ -497,55 +618,150 @@ class MavlinkThread:
             mrtmavlink.MAV_TYPE_GCS, mrtmavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0
         )
 
+    def get_parameter(
+        self,
+        id: str,
+        callback: Callable[[Union[ParamValue, None]], None],
+    ):
+        self.loop.create_task(self._get_parameter(id, callback))
+
+    async def _get_parameter(
+        self,
+        id: str,
+        callback: Callable[[Union[ParamValue, None]], None],
+    ):
+        assert len(id) <= 16
+        if self.system_id is None:
+            logging.info("Failed to get parameter, system_id not set")
+            return
+
+        if self.is_requesting_parameters:
+            logging.warning("Already requesting parameters")
+            callback(None)
+            return
+
+        RETRY_PERIOD_S = 0.25
+        try:
+            self.is_requesting_parameters = True
+
+            logging.info(f"Getting Param {id}")
+
+            self.param_result = None
+            self.conn.param_request_read_send(
+                self.system_id,
+                mrtmavlink.MAV_COMP_ID_AUTOPILOT1,
+                id.encode("utf-8"),
+                -1,
+            )
+            try:
+                async with self.param_cond:
+                    await asyncio.wait_for(self.param_cond.wait(), RETRY_PERIOD_S)
+            except asyncio.TimeoutError:
+                logging.error("Timeout waiting for parameter ack")
+                callback(None)
+                return
+
+            if self.param_result is not None:
+                if self.param_result.name == id:
+                    callback(self.param_result)
+                else:
+                    logging.warning(
+                        f"Set parameter {id} but got {self.param_result.name}"
+                    )
+                    callback(None)
+            else:
+                logging.warning(f"Set parameter {id} but got None")
+                callback(None)
+        finally:
+            self.is_requesting_parameters = False
+
     def set_parameter(
         self,
         id: str,
-        value: float,
-        typ: int,
-        component: int = mrtmavlink.MAV_COMP_ID_AUTOPILOT1,
+        value: ParamValueType,
+        callback: Callable[[Union[ParamValue, None]], None] = lambda x: None,
     ):
-        self.loop.call_soon_threadsafe(
-            lambda: self._set_parameter(id, value, typ, component)
-        )
+        self.loop.create_task(self._set_parameter(id, value, callback))
 
-    def _set_parameter(self, id: str, value: float, typ: int, component: int):
+    async def _set_parameter(
+        self,
+        id: str,
+        value: ParamValueType,
+        callback: Callable[[Union[ParamValue, None]], None],
+    ):
         assert len(id) <= 16
         if self.system_id is None:
             logging.info("Failed to set parameter, system_id not set")
             return
 
-        logging.info(f"Setting Param {id} to {value}")
+        if self.is_requesting_parameters:
+            logging.warning("Already requesting parameters")
+            callback(None)
+            return
 
-        if typ == mrtmavlink.MAV_PARAM_TYPE_UINT8:
-            val_bytes = struct.pack("BBBB", int(value), 0, 0, 0)
-        elif typ == mrtmavlink.MAV_PARAM_TYPE_INT8:
-            val_bytes = struct.pack("bBBB", int(value), 0, 0, 0)
-        elif typ == mrtmavlink.MAV_PARAM_TYPE_UINT16:
-            val_bytes = struct.pack("<HBB", int(value), 0, 0)
-        elif typ == mrtmavlink.MAV_PARAM_TYPE_INT16:
-            val_bytes = struct.pack("<hBB", int(value), 0, 0)
-        elif typ == mrtmavlink.MAV_PARAM_TYPE_UINT32:
-            val_bytes = struct.pack("<I", int(value))
-        elif typ == mrtmavlink.MAV_PARAM_TYPE_INT32:
-            val_bytes = struct.pack("<i", int(value))
-        elif typ == mrtmavlink.MAV_PARAM_TYPE_REAL32:
-            val_bytes = struct.pack("<f", value)
-        else:
-            assert False, "unsupported type"
+        RETRY_PERIOD_S = 0.25
+        try:
+            self.is_requesting_parameters = True
 
-        self.conn.param_set_send(
-            self.system_id,
-            component,
-            id.encode("utf-8"),
-            struct.unpack("f", val_bytes)[0],
-            typ,
-        )
+            logging.info(f"Setting Param {id} to {value}")
+
+            if isinstance(value, ParamUint8):
+                val_bytes = struct.pack("BBBB", int(value.value), 0, 0, 0)
+                typ = mrtmavlink.MAV_PARAM_TYPE_UINT8
+            elif isinstance(value, ParamInt8):
+                val_bytes = struct.pack("bBBB", int(value.value), 0, 0, 0)
+                typ = mrtmavlink.MAV_PARAM_TYPE_INT8
+            elif isinstance(value, ParamUint16):
+                val_bytes = struct.pack("<HBB", int(value.value), 0, 0)
+                typ = mrtmavlink.MAV_PARAM_TYPE_UINT16
+            elif isinstance(value, ParamInt16):
+                val_bytes = struct.pack("<hBB", int(value.value), 0, 0)
+                typ = mrtmavlink.MAV_PARAM_TYPE_INT16
+            elif isinstance(value, ParamUint32):
+                val_bytes = struct.pack("<I", int(value.value))
+                typ = mrtmavlink.MAV_PARAM_TYPE_UINT32
+            elif isinstance(value, ParamInt32):
+                val_bytes = struct.pack("<i", int(value.value))
+                typ = mrtmavlink.MAV_PARAM_TYPE_INT32
+            elif isinstance(value, ParamReal32):
+                val_bytes = struct.pack("<f", value.value)
+                typ = mrtmavlink.MAV_PARAM_TYPE_REAL32
+            else:
+                assert False, "unsupported type"
+
+            self.param_result = None
+            self.conn.param_set_send(
+                self.system_id,
+                mrtmavlink.MAV_COMP_ID_AUTOPILOT1,
+                id.encode("utf-8"),
+                struct.unpack("f", val_bytes)[0],
+                typ,
+            )
+            try:
+                async with self.param_cond:
+                    await asyncio.wait_for(self.param_cond.wait(), RETRY_PERIOD_S)
+            except asyncio.TimeoutError:
+                logging.error("Timeout waiting for parameter ack")
+                callback(None)
+                return
+
+            if self.param_result is not None:
+                if self.param_result.name == id:
+                    callback(self.param_result)
+                else:
+                    logging.warning(
+                        f"Set parameter {id} but got {self.param_result.name}"
+                    )
+                    callback(None)
+            else:
+                logging.warning(f"Set parameter {id} but got None")
+                callback(None)
+        finally:
+            self.is_requesting_parameters = False
 
     def set_motor_enablement(self, enable: bool):
         logging.info(f"Setting Motor Enablement to {enable}")
-        self.set_parameter(
-            "MOTOR_ENABLE", 1 if enable else 0, mrtmavlink.MAV_PARAM_TYPE_UINT8
-        )
+        self.set_parameter("MOTOR_ENABLE", ParamUint8(1 if enable else 0))
 
     async def _run(self):
         with self.is_started_cv:
@@ -554,6 +770,7 @@ class MavlinkThread:
 
         self.loop = asyncio.get_running_loop()
         self.ack_cond = asyncio.Condition()
+        self.param_cond = asyncio.Condition()
         await self.loop.create_datagram_endpoint(lambda: self, sock=self.sock)  # type: ignore
 
         while not self.is_done:
@@ -566,6 +783,52 @@ class MavlinkThread:
 
     def _send_system_time(self):
         self.conn.system_time_send(int(time.time() * 1e6), 0)
+
+    def _send_param_request_list(self):
+        self.conn.param_request_list_send(
+            self.system_id,  # target_system
+            mrtmavlink.MAV_COMP_ID_AUTOPILOT1,  # target_component
+        )
+
+    def request_parameters(self, callback: Callable[list[ParamValue], None]):
+        self.loop.create_task(self._request_parameters(callback))
+
+    async def _request_parameters(self, callback: Callable[list[ParamValue], None]):
+        if self.system_id is None:
+            logging.warning("System ID not set, not requesting parameters")
+            return
+
+        if self.is_requesting_parameters:
+            logging.warning("Already requesting parameters")
+            return
+
+        RETRY_PERIOD_S = 0.25
+        params: list[ParamValue] = []
+        try:
+            self.is_requesting_parameters = True
+            self._send_param_request_list()
+            while True:
+                try:
+                    self.param_result = None
+                    async with self.param_cond:
+                        await asyncio.wait_for(self.param_cond.wait(), RETRY_PERIOD_S)
+
+                    if self.param_result is not None:
+                        params.append(self.param_result)
+                        if (
+                            self.param_result.param_idx
+                            == self.param_result.num_param - 1
+                        ):
+                            break
+                except asyncio.TimeoutError:
+                    logging.error("Timeout waiting for parameter")
+                    break
+
+        finally:
+            self.is_requesting_parameters = False
+            self.param_result = None
+
+        callback(params)
 
     def send_autopilot_stop(self):
         self.loop.call_soon_threadsafe(lambda: self._send_autopilot_stop())
