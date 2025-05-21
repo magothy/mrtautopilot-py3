@@ -3,6 +3,7 @@ import threading
 import multiprocessing
 import socket
 import asyncio
+import datetime
 import logging
 import struct
 import uuid
@@ -265,6 +266,78 @@ class LowBandwidth:
     position_error_m: Union[float, None]
     triggered_health_items: List[HealthItem]
     fault_response: Union[HealthResponse, None]
+
+
+class GpsFixType(Enum):
+    NoGps = 0
+    NoFix = 1
+    Fix2d = 2
+    Fix3d = 3
+    Dgps = 4
+    RtkFloat = 5
+    RtkFixed = 6
+    Static = 7
+    Ppp = 8
+
+
+@dataclass
+class Gps2Raw:
+    def __init__(self, msg: mrtmavlink.MAVLink_gps2_raw_message):
+        self.timestamp = datetime.datetime.fromtimestamp(
+            msg.time_usec / 1e6, tz=datetime.timezone.utc
+        )
+        self.fix_type = GpsFixType(msg.fix_type)
+
+        if msg.lat != 0x7FFFFFFF:
+            self.latitude_deg = msg.lat / 1e7
+        else:
+            self.latitude_deg = None
+
+        if msg.lon != 0x7FFFFFFF:
+            self.longitude_deg = msg.lon / 1e7
+        else:
+            self.longitude_deg = None
+
+        if msg.alt != 0x7FFFFFF:
+            self.altitude_m = msg.alt / 1000
+        else:
+            self.altitude_m = None
+
+        if msg.eph != 0xFFFF:
+            self.hdop = msg.eph / 100
+        else:
+            self.hdop = None
+
+        if msg.epv != 0xFFFF:
+            self.vdop = msg.epv / 100
+        else:
+            self.vdop = None
+
+        if msg.vel != 0xFFFF:
+            self.velocity_mps = msg.vel / 100
+        else:
+            self.velocity_mps = None
+
+        if msg.cog != 0xFFFF:
+            self.course_deg = msg.cog / 100
+        else:
+            self.course_deg = None
+
+        if msg.satellites_visible != 0xFF:
+            self.num_set = msg.satellites_visible
+        else:
+            self.num_set = None
+
+    timestamp: datetime.datetime
+    fix_type: GpsFixType
+    latitude_deg: Union[float, None]
+    longitude_deg: Union[float, None]
+    altitude_m: Union[float, None]
+    hdop: Union[float, None]
+    vdop: Union[float, None]
+    velocity_mps: Union[float, None]
+    course_deg: Union[float, None]
+    num_set: Union[int, None]
 
 
 class MavlinkThread:
