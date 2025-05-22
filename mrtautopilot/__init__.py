@@ -1,4 +1,4 @@
-__version__ = "8"
+__version__ = "9"
 
 from .autopilot import *
 from .mission import *
