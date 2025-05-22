@@ -789,10 +789,10 @@ class MavlinkThread:
             mrtmavlink.MAV_COMP_ID_AUTOPILOT1,  # target_component
         )
 
-    def request_parameters(self, callback: Callable[list[ParamValue], None]):
+    def request_parameters(self, callback: Callable[[List[ParamValue]], None]):
         self.loop.create_task(self._request_parameters(callback))
 
-    async def _request_parameters(self, callback: Callable[list[ParamValue], None]):
+    async def _request_parameters(self, callback: Callable[[List[ParamValue]], None]):
         if self.system_id is None:
             logging.warning("System ID not set, not requesting parameters")
             return
@@ -802,7 +802,7 @@ class MavlinkThread:
             return
 
         RETRY_PERIOD_S = 0.25
-        params: list[ParamValue] = []
+        params: List[ParamValue] = []
         try:
             self.is_requesting_parameters = True
             self._send_param_request_list()
