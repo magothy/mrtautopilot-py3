@@ -1077,3 +1077,42 @@ class MavlinkThread:
 
         finally:
             self.is_sending_mission = False
+
+    def set_attitude(
+        self,
+        roll_rad: float = 0,
+        pitch_rad: float = 0,
+        yaw_rad: float = 0,
+        roll_rate_rps: float = 0,
+        pitch_rate_rps: float = 0,
+        yaw_rate_rps: float = 0,
+    ):
+        self.loop.call_soon_threadsafe(
+            lambda: self._set_attitude(
+                roll_rad,
+                pitch_rad,
+                yaw_rad,
+                roll_rate_rps,
+                pitch_rate_rps,
+                yaw_rate_rps,
+            )
+        )
+
+    def _set_attitude(
+        self,
+        roll_rad: float,
+        pitch_rad: float,
+        yaw_rad: float,
+        roll_rate_rps: float,
+        pitch_rate_rps: float,
+        yaw_rate_rps: float,
+    ):
+        self.conn.attitude_send(
+            0,
+            roll_rad,
+            pitch_rad,
+            yaw_rad,
+            roll_rate_rps,
+            pitch_rate_rps,
+            yaw_rate_rps,
+        )
