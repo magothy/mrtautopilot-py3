@@ -460,6 +460,7 @@ class MavlinkThread:
     ):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setblocking(False)
+        self.msg_callback: Callable[[mrtmavlink.MAVLink_message], None] = lambda x: None
 
         if multicast_group:
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -561,7 +562,13 @@ class MavlinkThread:
             self.ack_result = result
             self.ack_cond.notify()
 
+    def register_message_callback(
+        self, callback: Callable[[mrtmavlink.MAVLink_message], None]
+    ):
+        self.msg_callback = callback
+
     def _msg_callback(self, msg: mrtmavlink.MAVLink_message):
+        self.msg_callback(msg)
         sys_id = msg.get_srcSystem()
         logging.debug(f"Received: {msg.msgname}, sys_id={sys_id}, {msg}")
         if self.system_id != sys_id:
