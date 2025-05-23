@@ -314,9 +314,9 @@ class Gps2Raw:
             self.vdop = None
 
         if msg.vel != 0xFFFF:
-            self.velocity_mps = msg.vel / 100
+            self.speed_mps = msg.vel / 100
         else:
-            self.velocity_mps = None
+            self.speed_mps = None
 
         if msg.cog != 0xFFFF:
             self.course_deg = msg.cog / 100
@@ -324,9 +324,9 @@ class Gps2Raw:
             self.course_deg = None
 
         if msg.satellites_visible != 0xFF:
-            self.num_set = msg.satellites_visible
+            self.num_satellites = msg.satellites_visible
         else:
-            self.num_set = None
+            self.num_satellites = None
 
     timestamp: datetime.datetime
     fix_type: GpsFixType
@@ -335,9 +335,9 @@ class Gps2Raw:
     altitude_m: Union[float, None]
     hdop: Union[float, None]
     vdop: Union[float, None]
-    velocity_mps: Union[float, None]
+    speed_mps: Union[float, None]
     course_deg: Union[float, None]
-    num_set: Union[int, None]
+    num_satellites: Union[int, None]
 
 
 @dataclass
