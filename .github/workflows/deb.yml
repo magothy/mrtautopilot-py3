@@ -1,0 +1,63 @@
+name: Create Debian Package
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Debian Packages
+        run: ./scripts/create-deb.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-artifact
+          path: "*.deb"
+
+  deploy-deb:
+    runs-on: ubuntu-latest
+    needs: build
+    if: ${{ success() }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Upload Packages
+        env:
+          DISTRO_NAME: ${{ secrets.DEB_DISTRO_NAME }}
+        run: |
+          set -x
+          SHORT_SHA=${GITHUB_SHA::7}
+
+          function s3put {
+            DIR_NAME=$1
+            DISTRO=$2
+            PACKAGE_NAME=$3
+            FILE_SUFFIX=$4
+            VERSION=$(head -1 mrtautopilot/__init__.py | cut -d'"' -f2)
+            ARTIFACT_NAME=${PACKAGE_NAME}_${VERSION}.${GITHUB_RUN_NUMBER}-${SHORT_SHA}${FILE_SUFFIX}
+            aws s3api put-object --bucket ${{ secrets.DEB_S3_BUCKET_NAME }} --checksum-algorithm SHA256 --key pool/${DISTRO}/${PACKAGE_NAME}/${ARTIFACT_NAME} --body ${DIR_NAME}/${ARTIFACT_NAME}
+            aws s3api put-object --bucket ${{ secrets.DEB_S3_BUCKET_NAME }} --checksum-algorithm SHA256 --key pool/${DISTRO}-unstable/${PACKAGE_NAME}/${ARTIFACT_NAME} --body ${DIR_NAME}/${ARTIFACT_NAME}
+          }
+
+          # upload deb files to s3
+          s3put deb-artifact $DISTRO_NAME python3-magothy-autopilot _all.deb
+
+          # trigger lambda to update deb repository manifest files
+          echo "{\"distro\": \"t3c$DISTRO_SUFFIX\"}" > args.json
+          AWS_PAGER="" aws lambda invoke-async --function-name ${{ secrets.DEB_LAMBDA_FUNCTION_NAME }} --invoke-args args.json

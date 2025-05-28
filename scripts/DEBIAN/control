@@ -1,0 +1,6 @@
+Package: python3-magothy-autopilot
+Version: VERSION_STR
+Architecture: all
+Maintainer: Nathan Knotts <nathan@magothyrt.com>
+Description: Python3 Magothy Autopilot Library
+Depends: python3, python3-protobuf, python3-zstandard
