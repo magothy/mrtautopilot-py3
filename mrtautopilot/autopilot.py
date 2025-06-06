@@ -624,6 +624,11 @@ class MavlinkThread:
             mrtmavlink.MAV_TYPE_GCS, mrtmavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0
         )
 
+    def send_mavlink(
+        self, msg: mrtmavlink.MAVLink_message, force_mavlink1: bool = False
+    ) -> None:
+        self.loop.call_soon_threadsafe(lambda: self.conn.send(msg, force_mavlink1))
+
     def get_parameter(
         self,
         id: str,
