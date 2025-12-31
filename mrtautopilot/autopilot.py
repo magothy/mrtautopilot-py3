@@ -1,21 +1,21 @@
-import time
-import threading
-import multiprocessing
-import socket
 import asyncio
 import datetime
 import logging
+import multiprocessing
+import random
+import socket
 import struct
+import threading
+import time
 import uuid
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Union, Tuple, Callable
+from typing import Callable, List, Tuple, Union
 
 import mrtmavlink
-from . import mission
-
 import zstandard
 
+from . import mission
 
 SYSTEM_ID = 254  # system id for the mavlink thread
 
@@ -246,6 +246,7 @@ class LowBandwidth:
                     break
 
             assert self.fault_response is not None
+        self.gcs_set_mode_uid = msg.gcs_set_mode_uuid_lsb
 
     autopilot_mode: AutopilotMode
     main_mode: MagothyCustomMainMode
@@ -266,6 +267,7 @@ class LowBandwidth:
     position_error_m: Union[float, None]
     triggered_health_items: List[HealthItem]
     fault_response: Union[HealthResponse, None]
+    gcs_set_mode_uid: int
 
 
 class GpsFixType(Enum):
@@ -449,6 +451,15 @@ class ParamValue:
     num_param: int
 
 
+def random_uint32():
+    return random.randint(0, 1 << 32 - 1)
+
+
+def uint32_to_float(value: int) -> float:
+    packed_bytes = struct.pack("<I", value)
+    return struct.unpack("<f", packed_bytes)[0]
+
+
 class MavlinkThread:
     def __init__(
         self,
@@ -461,6 +472,9 @@ class MavlinkThread:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setblocking(False)
         self.msg_callback: Callable[[mrtmavlink.MAVLink_message], None] = lambda x: None
+        self.uid = random_uint32()
+        self.has_control_lock = threading.Lock()
+        self.has_control_var = False
 
         if multicast_group:
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -567,6 +581,12 @@ class MavlinkThread:
     ):
         self.msg_callback = callback
 
+    def has_control(self) -> bool:
+        control = False
+        with self.has_control_lock:
+            control = self.has_control_var
+        return control
+
     def _msg_callback(self, msg: mrtmavlink.MAVLink_message):
         self.msg_callback(msg)
         sys_id = msg.get_srcSystem()
@@ -580,6 +600,10 @@ class MavlinkThread:
 
             if not self.low_bandwidth_queue.full():
                 self.low_bandwidth_queue.put_nowait(data)
+
+            control = self.uid == data.gcs_set_mode_uid
+            with self.has_control_lock:
+                self.has_control_var = control
         elif type(msg) is mrtmavlink.MAVLink_statustext_message:
             if (
                 msg.severity == mrtmavlink.MAV_SEVERITY_CRITICAL
@@ -796,6 +820,10 @@ class MavlinkThread:
         self.conn.system_time_send(int(time.time() * 1e6), 0)
 
     def _send_param_request_list(self):
+        if self.system_id is None:
+            logging.warning("System ID not set, not requesting parameters")
+            return
+
         self.conn.param_request_list_send(
             self.system_id,  # target_system
             mrtmavlink.MAV_COMP_ID_AUTOPILOT1,  # target_component
@@ -841,14 +869,17 @@ class MavlinkThread:
 
         callback(params)
 
-    def send_autopilot_stop(self):
-        self.loop.call_soon_threadsafe(lambda: self._send_autopilot_stop())
+    def _uuid(self) -> List[float]:
+        uid = uuid.uuid4()
+        uuid_params = list(struct.unpack("<ffff", uid.bytes))
+        uuid_params[0] = uint32_to_float(self.uid)
+        return uuid_params
 
-    def _send_autopilot_stop(self):
-        if self.system_id is None:
-            logging.warning("System ID not set, not sending STOP")
+    def _set_mode(self, main_mode: int, sub_mode: int):
+        sys_id = self.system_id
+        if sys_id is None:
+            logging.warning("System ID not set, not sending SET_MODE")
             return
-        logging.info("Sending STOP")
 
         # custom_mode is a uint32
         # param2 is a float
@@ -857,24 +888,44 @@ class MavlinkThread:
             [
                 0,
                 0,
-                MagothyCustomMainMode.GUIDED.value,
-                MagothyCustomSubModeGuided.READY.value,
+                main_mode,
+                sub_mode,
             ]
         )
 
+        uuid_params = self._uuid()
         self.conn.command_long_send(
-            self.system_id,  # target_system
+            sys_id,  # target_system
             mrtmavlink.MAV_COMP_ID_AUTOPILOT1,  # target_component
             mrtmavlink.MAV_CMD_DO_SET_MODE,  # command
             0,  # confirmation
             0,  # param1
-            struct.unpack("f", custom_mode)[0],  # param2 (custom_mode)
+            struct.unpack("<f", custom_mode)[0],  # param2 (custom_mode)
             0,  # param3
-            0,  # param4
-            0,  # param5
-            0,  # param6
-            0,  # param7
+            uuid_params[0],  # param4 // UUID LSB
+            uuid_params[1],  # param5 // UUID
+            uuid_params[2],  # param6 // UUID
+            uuid_params[3],  # param7 // UUID MSB
         )
+
+    def send_autopilot_stop(self):
+        self.loop.call_soon_threadsafe(lambda: self._send_autopilot_stop())
+
+    def _send_autopilot_stop(self):
+        logging.info("Sending STOP")
+        self._set_mode(
+            MagothyCustomMainMode.GUIDED.value, MagothyCustomSubModeGuided.READY.value
+        )
+
+    def send_take_control(self):
+        self.send_autopilot_stop()
+
+    def send_autopilot_manual_mode(self):
+        self.loop.call_soon_threadsafe(lambda: self._send_autopilot_manual_mode())
+
+    def _send_autopilot_manual_mode(self):
+        logging.info("Sending MANUAL MODE")
+        self._set_mode(MagothyCustomMainMode.MANUAL.value, 0)
 
     def send_waypoint(self, lat_deg: float, lon_deg: float, speed_mps: float):
         self.loop.call_soon_threadsafe(
@@ -889,18 +940,19 @@ class MavlinkThread:
             f"Sending Waypoint to lat {lat_deg}°, lon {lon_deg}°, speed {speed_mps} m/s"
         )
 
+        uuid_params = self._uuid()
         self.conn.command_long_send(
             self.system_id,  # target_system
             mrtmavlink.MAV_COMP_ID_AUTOPILOT1,  # target_component
             mrtmavlink.MAV_CMD_WAYPOINT_USER_1,  # command
             0,  # confirmation
-            0,  # param1
+            uuid_params[1],  # param1
             speed_mps,  # param2 (speed_mps)
             0,  # param3
             0,  # param4
             lat_deg * 1e7,  # param5 (latitude_deg * 1e7)
             lon_deg * 1e7,  # param6 (longitude_deg * 1e7)
-            0,  # param7
+            uuid_params[0],  # param7
         )
 
     def send_loiter(self, speed_mps: float, radius_m: float, duration_s: float):
@@ -916,6 +968,7 @@ class MavlinkThread:
             f"Sending Loiter: speed {speed_mps} m/s, radius {radius_m} m, duration {duration_s} s"
         )
 
+        uuid_params = self._uuid()
         self.conn.command_long_send(
             self.system_id,  # target_system
             mrtmavlink.MAV_COMP_ID_AUTOPILOT1,  # target_component
@@ -924,10 +977,10 @@ class MavlinkThread:
             duration_s,  # param1 - duration (seconds)
             speed_mps,  # param2 - speed (m/s)
             radius_m,  # param3 - radiums (m)
-            0,  # param4 - unused
+            uuid_params[0],  # param4 - uuid 1/4
             float("nan"),  # param5 (latitude_deg * 1e7)
             float("nan"),  # param6 (longitude_deg * 1e7)
-            0,  # param7 - unused
+            uuid_params[1],  # param7 - uuid 2/4
         )
 
     def send_protobuf_proxy(self, proto_id: int, buf: bytes):
@@ -1037,9 +1090,10 @@ class MavlinkThread:
 
             logging.info("Mission upload successful, starting mission")
 
-            uid = uuid.uuid4()
-            uuid_params = struct.unpack("<ffff", uid.bytes)
-            self.expected_cmd_uuid = struct.unpack("<iiii", uid.bytes)[0]
+            uuid_params = self._uuid()
+            self.expected_cmd_uuid = struct.unpack(
+                "<iiii", struct.pack("<ffff", *uuid_params)
+            )[0]
 
             # we have successfully sent the mission, now start it
             cmd = mrtmavlink.MAVLink_command_long_message(
@@ -1120,4 +1174,48 @@ class MavlinkThread:
             roll_rate_rps,
             pitch_rate_rps,
             yaw_rate_rps,
+        )
+
+    def send_manual_control(
+        self,
+        x: int = 0x7FFF,
+        y: int = 0x7FFF,
+        z: int = 0x7FFF,
+        r: int = 0x7FFF,
+        s: int = 0x7FFF,
+        t: int = 0x7FFF,
+        aux1: int = 0x7FFF,
+        aux2: int = 0x7FFF,
+        aux3: int = 0x7FFF,
+        aux4: int = 0x7FFF,
+        aux5: int = 0x7FFF,
+        aux6: int = 0x7FFF,
+        enabled_extensions: int = 0,
+        buttons: int = 0,
+        buttons2: int = 0,
+    ):
+        sys_id = self.system_id
+        if sys_id is None:
+            logging.warning("System ID not set, not sending manual control")
+            return
+
+        self.loop.call_soon_threadsafe(
+            lambda: self.conn.manual_control_send(
+                target=sys_id,
+                x=x,
+                y=y,
+                z=z,
+                r=r,
+                s=s,
+                t=t,
+                buttons=buttons,
+                buttons2=buttons2,
+                aux1=aux1,
+                aux2=aux2,
+                aux3=aux3,
+                aux4=aux4,
+                aux5=aux5,
+                aux6=aux6,
+                enabled_extensions=enabled_extensions,
+            )
         )

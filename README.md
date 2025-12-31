@@ -18,10 +18,11 @@ Example usage:
 import logging
 import selectors
 
-import mrtautopilot
-
 # example for send_protobuf_proxy
 from mrtproto import autopilot_pb2
+
+import mrtautopilot
+
 PROTO_ID = 0x5433  # defined by protocol
 
 
@@ -34,7 +35,9 @@ def main():
 
     def got_low_bandwidth():
         d: mrtautopilot.LowBandwidth = mavlink.low_bandwidth_queue.get_nowait()
-        logging.info(f"Got Vehicle Data: {d.latitude_deg}, {d.longitude_deg}")
+        logging.info(
+            f"Got Vehicle Data: {d.latitude_deg}, {d.longitude_deg}, has control: {mavlink.has_control()}"
+        )
 
     try:
         sel = selectors.DefaultSelector()
@@ -47,9 +50,13 @@ def main():
         count = 0
         mavlink.start()
         while True:
-            mavlink.send_heartbeat()
+            if mavlink.has_control():
+                mavlink.send_heartbeat()
 
             count += 1
+
+            if count == 3:
+                mavlink.send_take_control()
 
             if count == 5:
                 mavlink.send_protobuf_proxy(PROTO_ID, proto.SerializeToString())
@@ -84,6 +91,13 @@ def main():
             if count == 20:
                 mavlink.set_motor_enablement(False)
                 mavlink.send_autopilot_stop()
+
+            if count == 25:
+                mavlink.send_autopilot_manual_mode()
+
+            if count > 25:
+                # z = thrust, # r = rudder, 0=%0, 1000=100%
+                mavlink.send_manual_control(z=100, r=100)
 
             for key, mask in sel.select():
                 key.data()
