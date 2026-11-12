@@ -300,7 +300,7 @@ class Gps2Raw:
         else:
             self.longitude_deg = None
 
-        if msg.alt != 0x7FFFFFF:
+        if msg.alt != 0x7FFFFFFF:
             self.altitude_m = msg.alt / 1000
         else:
             self.altitude_m = None
